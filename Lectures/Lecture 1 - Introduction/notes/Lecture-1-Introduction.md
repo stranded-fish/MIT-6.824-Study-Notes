@@ -1,6 +1,6 @@
 # Lecture 1 - Introduction
 
-![Lecture 1 - Introduction](https://yulan-img-work.oss-cn-beijing.aliyuncs.com/img/202203051834678.png)
+![Lecture 1 - Introduction](https://yulan-img-work.oss-cn-beijing.aliyuncs.com/img/202203270947906.png)
 
 目录：
 
