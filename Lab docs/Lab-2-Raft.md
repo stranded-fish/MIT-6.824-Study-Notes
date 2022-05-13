@@ -488,4 +488,15 @@ TODO 函数调用图
 
 ## 实验结果
 
+完成所有实验后，可通过 `go test -race` 命令，同时测试全部 Lab 2A - 2D，测试结果如下：
+
+![实验结果](https://yulan-img-work.oss-cn-beijing.aliyuncs.com/img/202205131730417.png)
+
 ## 参考链接
+
+* [6.824 Lab 2: Raft](http://nil.csail.mit.edu/6.824/2021/labs/lab-raft.html)
+* [OneSizeFitsQuorum/MIT6.824-2021-lab2.md](https://github.com/OneSizeFitsQuorum/MIT6.824-2021/blob/master/docs/lab2.md#handler)
+* [SwordHarry/MIT6.824_2021_note](https://github.com/SwordHarry/MIT6.824_2021_note)
+* [mit-6.824 2021 Lab2：Raft](https://zhuanlan.zhihu.com/p/462075728)
+* [braft-docs](https://github.com/kasshu/braft-docs)
+* [baidu/braft](https://github.com/baidu/braft)
