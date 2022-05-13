@@ -7,10 +7,14 @@
 - [MIT 6.824 - Lab 2: Raft](#mit-6824---lab-2-raft)
   - [实验内容](#实验内容)
   - [实验思路](#实验思路)
-    - [数据结构](#数据结构)
     - [节点启动流程](#节点启动流程)
+    - [节点数据结构](#节点数据结构)
     - [Part 2A - Leader 选举](#part-2a---leader-选举)
+      - [流程设计](#流程设计)
+      - [核心代码](#核心代码)
     - [Part 2B - 日志复制](#part-2b---日志复制)
+      - [流程设计](#流程设计-1)
+      - [核心代码](#核心代码-1)
     - [Part 2C - 持久化](#part-2c---持久化)
     - [Part 2D - 日志压缩](#part-2d---日志压缩)
   - [实验结果](#实验结果)
@@ -31,43 +35,117 @@
 
 ## 实验思路
 
-### 数据结构
-
-TODO Raft 节点数据结构定义说明
-
 ### 节点启动流程
 
-Raft 应用层通过 `Make()` 接口新建 Raft server。其函数接口定义如下：
+Raft 应用层通过 `Make()` 接口新建 Raft server，其接口定义如下：
 
 ```go
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {...}
 ```
 
-* peers: 包含 Raft 集群的全部端口号
-* me: 该节点端口号
-* persister: 用于数据持久化
-* applyCh: 用于 Raft 通知应用层进行 apply
+* `peers []*labrpc.ClientEnd`: 包含 Raft 集群的全部端口号
+* `me int`: 该节点端口号
+* `persister *Persister`: 用于数据持久化
+* `applyCh chan ApplyMsg`: 用于 Raft server 通知应用层进行 apply
 
 整个节点启动流程如下：
 
-* 初始化 Raft Node 结构体数据
-* 通过 persister 读取之前持久化的数据
-* 随机化选举超时时间，并启动选举超时计时器
-* 启动 apply 监听线程，用于监听状态机 commit 时机，并通知上层应用 apply。
+* 初始化 Raft Node 结构体；
+* 通过 persister 读取已持久化的数据；
+* 随机化选举超时时间，并启动选举超时计时器；
+* 启动 apply 监听协程，用于监听 Raft server commit 状态，并通知上层应用 apply。
+
+### 节点数据结构
+
+**Raft Node 结构体定义：**
+
+```go
+type Raft struct {
+	mu        sync.Mutex          // 互斥锁
+	peers     []*labrpc.ClientEnd // 保存所有 peers 的 RPC end points
+	persister *Persister          // 用于保存非易失数据
+	me        int                 // 记录当前节点索引
+	dead      int32               // 标记节点存活状态
+
+	// Non-Volatile 非易失参数 - 需写入磁盘持久化保存 (all servers)
+	currentTerm      int          // 当前任期（初始为 0 且单调递增）
+	votedFor         int          // 当前任期投票选择的候选者 ID（初值为 null）
+	logs             []LogEntry   // 日志记录，每条日志保存了该日志的任期与其包含的状态机的命令
+	commitIndex      int          // 最大已提交索引（初始为 0 且单调递增）
+	lastSSPointIndex int          // 快照中最后一个日志的索引
+	lastSSPointTerm  int          // 快照中最后一个日志对应的任期
+
+	// Volatile 易失参数 - 仅保存于内存 (all servers)
+	lastApplied int               // 当前应用到状态机的最大索引（初始为 0 且单调递增）
+	nextIndex   []int             // 将要发送给 follower 下一个 entry 的索引
+	matchIndex  []int             // follower 已完成同步的最高日志项的索引
+
+	// 自定义的必需变量
+	voteCounts   int              // 统计当前获得票数
+	currentState State            // 记录节点当前状态
+
+	// 选举超时计时器
+	electionTimer *time.Timer
+	timerLock     sync.Mutex
+
+	// 心跳计时器
+	heartbeatTimer     *time.Timer
+	heartbeatTimerLock sync.Mutex
+
+	// 应用层的提交队列
+	applyCh   chan ApplyMsg
+	applyCond *sync.Cond          // 用于在 commit 新条目后，唤醒 apply goroutine
+}
+```
+
+**Raft 节点状态定义：**
+
+```go
+type State int
+
+const (
+	StateLeader    State = 1
+	StateCandidate State = 2
+	StateFollower  State = 3
+	StateError     State = 4
+	StateShutdown  State = 5
+	StateEnd       State = 6
+)
+```
 
 ### Part 2A - Leader 选举
 
+#### 流程设计
+
 TODO 函数调用图
 
-* `electionTicker`：
-  * Raft 节点会在后台，运行选举超时计时器，当该计时器超时后，将会调用 `handleElectionTimeout` 方法，触发选举流程。
-* `handleElectionTimeout`：
-  * 触发选举超时的节点，将首先判断自己非 leader，然后将自己状态变为 candidate，增加自身 term 同时投票给自己，然后持久化该元数据。
-  * 然后将自身的 term、id、lastLogIndex、lastLogTerm 封装到 request 中，并发起 RPC。
+* `electionTicker`：选举定时器，超时将触发选举流程。
+  * `electionTicker` 会在 Raft server 初始化时作为后台协程启动，并运行在整个 Raft server 生命周期内。
+  * `electionTicker` 通过 `electionTimer` 选举超时计时器实现计时，而每个 Raft 节点均会随机选举超时时间，以降低多个节点同时发起选举，导致选票被瓜分的概率。
+  * 定时器判断超时后，将会调用 `handleElectionTimeout` 方法，发起选举。
+* `handleElectionTimeout`：处理 election timeout 选举超时 - 发起选举
+  * 在发起投票之前，首先需要判断自己状态非 leader，如果当前状态已经是 leader 则直接返回。
+  * 在确保状态非 leader 后，执行以下步骤：
+    * 变为 candidate 状态
+    * 自身 term + 1
+    * 投票给自己，并统计自己的选票
+    * 持久化状态
+    * 遍历整个集群，发起拉票请求
+* `HandleRequestVoteRequest`：处理来自 candidate 的拉票请求
+  * 其他节点在收到来自 candidate 的拉票请求后，会进行以下检查：
+    * 判断 request 中的 term 是否小于自身 term，若小于则直接忽略；
+    * 判断节点在该 term 是否已经投过票了，若已投则直接忽略；
+    * 判断 request 中的 term 是否大于自身 term，若是则执行 stepDown 更新状态；
+    * 最终如果收到 request 中的日志不落后于自身的日志，且自身还未投票，投票给这个节点，并更新自己的选举计时器，同时持久化状态。
+* `stepDown`：将节点状态回退为 follower，并更新相关状态
+  * 通常发生于节点收到一个 term 比自身大的消息时，此时可能代表集群选出了一个新的 leader 或是某节点发起了选举。
+* `HandleRequestVoteResponse`：candidate 处理拉票响应
+* `becomeLeader`：candidate 赢得选举后当选 leader
+
+#### 核心代码
 
 ```go
-// 处理 election timeout 选举超时 - 发起选举
 func (rf *Raft) handleElectionTimeout() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -100,22 +178,10 @@ func (rf *Raft) handleElectionTimeout() {
 }
 ```
 
-* `HandleRequestVoteRequest`
-  * 其他节点在收到来自 candidate 的请求投票请求后，会首先进行以下检查：
-    * 判断 request 中的 term 是否 < 自身 term
-    * 判断收到 request 中的 term == 自身 term，但该 term 已经投过票了（一个 term 只能投一次票）
-    * case 3.1 收到 request 中的 term > 自身 term，执行 step_down
-    * case 3.2 收到 request 中的日志 >= （不落后）于自身的日志，且自身还未投票，投票给这个节点，并更新自己的选举计时器，同时持久化状态。
-
 ```go
-// HandleRequestVoteRequest 处理来自 candidate 的拉票请求
 func (rf *Raft) HandleRequestVoteRequest(request *RequestVoteRequest, response *RequestVoteResponse) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
-	DPrintf("[%d]---Handle RequestVote, CandidatesId[%d] Term%d CurrentTerm%d LastLogIndex%d LastLogTerm%d votedFor[%d]",
-		rf.me, request.CandidateId, request.Term, rf.currentTerm, request.LastLogIndex, request.LastLogTerm, rf.votedFor)
-	defer DPrintf("[%d]---Return RequestVote, CandidatesId[%d] VoteGranted %v ", rf.me, request.CandidateId, response.VoteGranted)
 
 	// case 1. 收到 request 中的 term <  自身 term
 	if request.Term < rf.currentTerm {
@@ -145,10 +211,7 @@ func (rf *Raft) HandleRequestVoteRequest(request *RequestVoteRequest, response *
 }
 ```
 
-* `stepDown`
-
 ```go
-// 将节点状态回退为 follower，并更新相关状态
 func (rf *Raft) stepDown(term int) {
 	rf.currentState = StateFollower
 	rf.currentTerm = term
@@ -157,13 +220,6 @@ func (rf *Raft) stepDown(term int) {
 	rf.resetElectionTimer()
 }
 ```
-
-* `HandleRequestVoteResponse`
-  * candidate 在收到用户请求后，需要进行以下检查：
-    * 判断自身状态是否仍是 candidate
-    * 确保响应未过期
-    * 收到 response 中的 term > 自身 term - 进行状态回退
-    * 统计选票，并判断是否获得超过半数选票
 
 ```go
 func (rf *Raft) HandleRequestVoteResponse(term int, response RequestVoteResponse) {
@@ -198,19 +254,27 @@ func (rf *Raft) HandleRequestVoteResponse(term int, response RequestVoteResponse
 }
 ```
 
-* `becomeLeader`
-  * 再判断获得超过半数选票之后，当选 leader，当选 leader 后首先重置计时器，然后广播通知其他节点。
-
 ### Part 2B - 日志复制
+
+#### 流程设计
 
 TODO 函数调用图
 
 TODO 关键代码
 
-* `boardCastEntries`
-  * 遍历所有节点，检查是否...
-* `HandleAppendEntriesRequest`
-  * follower 处理 append entries RPC 请求
+* `boardCastEntries`：心跳广播 & append entries
+  * Raft 心跳与追加日志共用该函数，当 append entries 为空时，表示心跳，非空时，表示追加日志。
+  * `boardCastEntries` 会遍历整个 Raft 集群，检查为每个节点所维护的 nextIndex，判断是发送日志，还是安装快照，如果当前 nextIndex 比快照检查点更新，则选择发送日志。
+* `HandleAppendEntriesRequest`：follower 处理 append entries RPC 请求
+* `checkStepDown`：检查 term 与 state 以判断是否需要状态回退
+* `checkAndResolveConflict`：检查日志冲突并解决
+  * 判断收到的 entries 是否已经 apply，如果是，则直接忽略。
+  * 判断收到的 entries 是否跟自身 lastLogIndex 冲突，如果没有冲突，则直接追加，否则删掉自身冲突的 entries 然后追加收到的全部 entries。
+* `advanceFollowerCommittedIndex`：尝试推进 committed Index
+  * 判断 commit index 是否增大，如果是，则更新自身 last_commit_index 并唤醒 apply 协程进行 apply。
+* `handleAppendEntriesResponse`：Leader 处理 append entry RPC 响应
+
+#### 核心代码
 
 ```go
 // HandleAppendEntriesRequest follower 处理 append entries RPC 请求
@@ -276,9 +340,6 @@ func (rf *Raft) HandleAppendEntriesRequest(request *AppendEntriesRequest, respon
 }
 ```
 
-* `checkStepDown`
-  * 判断是否需要 step down
-
 ```go
 // in lock - 检查的 term 与 state 以判断是否需要状态回退
 func (rf *Raft) checkStepDown(requestTerm int, leaderId int) {
@@ -299,12 +360,6 @@ func (rf *Raft) checkStepDown(requestTerm int, leaderId int) {
 	}
 }
 ```
-
-* `checkAndResolveConflict`
-  * 啊手动阀
-* `advanceFollowerCommittedIndex`
-  * 奥斯丁激发
-* `handleAppendEntriesResponse`
 
 ```go
 // Leader 处理 append entry RPC 响应
@@ -364,13 +419,11 @@ func (rf *Raft) handleAppendEntriesResponse(server int, request *AppendEntriesRe
 }
 ```
 
-TODO 流程说明
-
 ### Part 2C - 持久化
 
-TODO 函数调用图
+实验持久化需要使用封装好的 Persister 对象的 persist 接口（出于实验测试目的，该接口实际上并没有真正落盘，其实仍然是保存到了内存中）。
 
-TODO 关键代码
+Raft 持久化设计，首先要明确需要持久化的参数，然后在每次修改后，调用 `persist` 持久化即可。
 
 ```C++
 // 持久化常规数据(无需加锁，外部有锁)
@@ -390,19 +443,22 @@ func (rf *Raft) persist() {
 }
 ```
 
-TODO 流程说明
-
 ### Part 2D - 日志压缩
 
 TODO 函数调用图
 
-TODO 关键代码
-
-```C++
-
-```
-
-TODO 流程说明
+* `InstallSnapShot`：Leader 为较为落后的 follower 安装快照
+  * Leader 将首先调用 `prepareSnapShot` 读取自身最新的快照，构造 `InstallSnapShotRequest` 然后调用 `sendSnapShot` 发起 RPC。
+* `HandleInstallSnapShotRequest`：Follower 处理来自 leader 的安装快照请求
+  * 首先判断 request 中的 term 是否大于自身 term，如果是则直接忽略并返回
+  * 判断自身状态是否是 follower，如果不是则执行 stepDown
+  * 判断自身快照状态是否大于最新的快照状态，如果是则直接返回，
+  * 如果自身日志比快照更新，则首先保存在这之后的日志，然后在保存快照，最后删掉更旧的日志。
+  * 调用持久化方法 `SaveStateAndSnapshot` 保存
+* `HandleInstallSnapShotResponse`
+  * 判断自身状态是否仍是 leader，如果不是则直接返回，
+  * 判断 term 是否匹配，如果 term 更大，则执行 stepDown
+  * 更新 follower 的 matchIndex 和 nextIndex
 
 ## 实验结果
 
