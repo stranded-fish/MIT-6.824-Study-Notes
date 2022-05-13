@@ -9,14 +9,14 @@
   - [实验思路](#实验思路)
     - [节点启动流程](#节点启动流程)
     - [节点数据结构](#节点数据结构)
-    - [Part 2A - Leader 选举](#part-2a---leader-选举)
+    - [Part 2A: Leader 选举](#part-2a-leader-选举)
       - [流程设计](#流程设计)
       - [核心代码](#核心代码)
-    - [Part 2B - 日志复制](#part-2b---日志复制)
+    - [Part 2B: 日志复制](#part-2b-日志复制)
       - [流程设计](#流程设计-1)
       - [核心代码](#核心代码-1)
-    - [Part 2C - 持久化](#part-2c---持久化)
-    - [Part 2D - 日志压缩](#part-2d---日志压缩)
+    - [Part 2C: 持久化](#part-2c-持久化)
+    - [Part 2D: 日志压缩](#part-2d-日志压缩)
   - [实验结果](#实验结果)
   - [参考链接](#参考链接)
 
@@ -114,11 +114,13 @@ const (
 )
 ```
 
-### Part 2A - Leader 选举
+### Part 2A: Leader 选举
 
 #### 流程设计
 
-TODO 函数调用图
+**Leader 选举流程 - 函数调用图：**
+
+![Leader 选举流程 - 函数调用图](https://yulan-img-work.oss-cn-beijing.aliyuncs.com/img/202205131809057.png)
 
 * `electionTicker`：选举定时器，超时将触发选举流程。
   * `electionTicker` 会在 Raft server 初始化时作为后台协程启动，并运行在整个 Raft server 生命周期内。
@@ -263,11 +265,13 @@ func (rf *Raft) HandleRequestVoteResponse(term int, response RequestVoteResponse
 }
 ```
 
-### Part 2B - 日志复制
+### Part 2B: 日志复制
 
 #### 流程设计
 
-TODO 函数调用图
+**日志复制流程 - 函数调用图：**
+
+![日志复制流程 - 函数调用图](https://yulan-img-work.oss-cn-beijing.aliyuncs.com/img/202205131809031.png)
 
 * `boardCastEntries`：心跳广播 & 追加日志。
   * Raft 心跳与追加日志共用该函数，当 append entries 为空时，表示心跳，非空时，表示追加日志。
@@ -441,7 +445,7 @@ func (rf *Raft) handleAppendEntriesResponse(server int, request *AppendEntriesRe
 }
 ```
 
-### Part 2C - 持久化
+### Part 2C: 持久化
 
 实验数据的持久化需要使用 Persister 对象封装好的 `persist` 接口，该接口出于实验测试的目的，实际上并没有真正的落盘，而是将其保存到了其他内存中。
 
@@ -464,9 +468,11 @@ func (rf *Raft) persist() {
 }
 ```
 
-### Part 2D - 日志压缩
+### Part 2D: 日志压缩
 
-TODO 函数调用图
+**日志压缩流程 - 函数调用图：**
+
+![日志压缩流程 - 函数调用图](https://yulan-img-work.oss-cn-beijing.aliyuncs.com/img/202205131810684.png)
 
 * `Snapshot`：用于应用层调用，创建一个快照。
   * 首先确保创建快照的 index 索引大于当前最新快照中的最后一个日志对应的索引，若否，则直接返回；
