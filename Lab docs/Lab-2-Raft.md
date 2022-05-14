@@ -158,7 +158,23 @@ const (
 
 #### 核心代码
 
-**1. `handleElectionTimeout` 处理 election timeout 选举超时 - 发起选举**
+**1. RequestVote RPC 结构定义**
+
+```go
+type RequestVoteRequest struct {
+    Term         int // candidate 任期
+    CandidateId  int // candidate id
+    LastLogIndex int // candidate 最后一条日志的索引
+    LastLogTerm  int // candidate 最后一条日志的任期
+}
+
+type RequestVoteResponse struct {
+    Term        int  // 选民当前任期，用于 candidate 更新自身信息
+    VoteGranted bool // 选民是否投票给 candidate，true 表示同意
+}
+```
+
+**2. `handleElectionTimeout` 处理 election timeout 选举超时 - 发起选举**
 
 ```go
 func (rf *Raft) handleElectionTimeout() {
@@ -195,7 +211,7 @@ func (rf *Raft) handleElectionTimeout() {
 }
 ```
 
-**2. `HandleRequestVoteRequest` 处理来自 candidate 的拉票请求**
+**3. `HandleRequestVoteRequest` 处理来自 candidate 的拉票请求**
 
 ```go
 func (rf *Raft) HandleRequestVoteRequest(request *RequestVoteRequest, response *RequestVoteResponse) {
@@ -230,7 +246,7 @@ func (rf *Raft) HandleRequestVoteRequest(request *RequestVoteRequest, response *
 }
 ```
 
-**3. `candidate` 处理拉票响应**
+**4. `candidate` 处理拉票响应**
 
 ```go
 func (rf *Raft) HandleRequestVoteResponse(term int, response RequestVoteResponse) {
@@ -303,7 +319,26 @@ func (rf *Raft) HandleRequestVoteResponse(term int, response RequestVoteResponse
 
 #### 核心代码
 
-**1. `HandleAppendEntriesRequest` follower 处理 append entries RPC 请求**
+**1. AppendEntries RPC 结构定义**
+
+```go
+type AppendEntriesRequest struct {
+    Term         int        // Leader 当前任期
+    LeaderId     int        // Leader id，用于 follower 重定向到 leader
+    PrevLogIndex int        // 前继日志的索引
+    PrevLogTerm  int        // 前继日志的任期
+    Entries      []LogEntry // 待追加 log Entries，为空时代表心跳
+    LeaderCommit int        // Leader commit index
+}
+
+type AppendEntriesResponse struct {
+    Term                   int  // follower 当前任期，用于 leader 更新自身信息
+    Success                bool // 返回 true，当 follower 包含的 entry 信息与 PrevLogIndex 和 PrevLogTerm 相匹配
+    FollowerCommittedIndex int  // follower committed Index
+}
+```
+
+**2. `HandleAppendEntriesRequest` follower 处理 append entries RPC 请求**
 
 ```go
 func (rf *Raft) HandleAppendEntriesRequest(request *AppendEntriesRequest, response *AppendEntriesResponse) {
@@ -368,7 +403,7 @@ func (rf *Raft) HandleAppendEntriesRequest(request *AppendEntriesRequest, respon
 }
 ```
 
-**2. `checkStepDown` 检查的 term 与 state 以判断是否需要状态回退**
+**3. `checkStepDown` 检查的 term 与 state 以判断是否需要状态回退**
 
 ```go
 func (rf *Raft) checkStepDown(requestTerm int, leaderId int) {
@@ -390,7 +425,7 @@ func (rf *Raft) checkStepDown(requestTerm int, leaderId int) {
 }
 ```
 
-**3. `handleAppendEntriesResponse` Leader 处理 append entry RPC 响应**
+**4. `handleAppendEntriesResponse` Leader 处理 append entry RPC 响应**
 
 ```go
 func (rf *Raft) handleAppendEntriesResponse(server int, request *AppendEntriesRequest, response *AppendEntriesResponse) {
@@ -412,7 +447,7 @@ func (rf *Raft) handleAppendEntriesResponse(server int, request *AppendEntriesRe
         // 收到 false，根据响应回复，更新 nextIndex
         rf.nextIndex[server] = response.FollowerCommitedIndex + 1
     } else {
-        // 收到了正确的回答,修改对应 matchIndex 和 nextIndex
+        // 收到了正确的回答，修改对应 matchIndex 和 nextIndex
         prev := rf.matchIndex[server]
         rf.matchIndex[server] = Max(rf.matchIndex[server], request.PrevLogIndex+len(request.Entries))
         now := rf.matchIndex[server]
@@ -492,6 +527,22 @@ func (rf *Raft) persist() {
   * 判断 term 是否匹配，如果 term 更大，则执行 `stepDown`；
   * 更新 follower 的 `matchIndex` 和 `nextIndex`。
 
+**InstallSnapshot RPC 结构定义**
+
+```go
+type InstallSnapshotArgs struct {
+    Term              int    // Leader 当前任期
+    LeaderId          int    // Leader id，用于 follower 重定向到 leader
+    LastIncludedIndex int    // 快照所包含的最后一条日志的 index
+    LastIncludedTerm  int    // 快照所包含的最后一条日志的 term
+    Data              []byte // 快照数据
+}
+
+type InstallSnapshotReply struct {
+    Term int                 // follower 当前任期，用于 leader 更新自身信息
+}
+```
+
 ## 实验结果
 
 完成所有实验后，可通过 `go test -race` 命令，同时测试全部 Lab 2A - 2D，测试结果如下：
@@ -501,6 +552,7 @@ func (rf *Raft) persist() {
 ## 参考链接
 
 * [6.824 Lab 2: Raft](http://nil.csail.mit.edu/6.824/2021/labs/lab-raft.html)
+* [In Search of an Understandable Consensus Algorithm (Extended Version)](https://raft.github.io/raft.pdf)
 * [OneSizeFitsQuorum/MIT6.824-2021-lab2.md](https://github.com/OneSizeFitsQuorum/MIT6.824-2021/blob/master/docs/lab2.md#handler)
 * [SwordHarry/MIT6.824_2021_note](https://github.com/SwordHarry/MIT6.824_2021_note)
 * [mit-6.824 2021 Lab2：Raft](https://zhuanlan.zhihu.com/p/462075728)
