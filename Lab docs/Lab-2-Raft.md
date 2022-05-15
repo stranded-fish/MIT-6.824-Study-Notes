@@ -120,7 +120,7 @@ const (
 
 **Leader 选举流程 - 函数调用图：**
 
-![Leader 选举流程 - 函数调用图](https://yulan-img-work.oss-cn-beijing.aliyuncs.com/img/202205131809057.png)
+![Leader 选举流程 - 函数调用图](https://yulan-img-work.oss-cn-beijing.aliyuncs.com/img/202205151048686.png)
 
 * `electionTicker`：选举定时器，超时将触发选举流程。
   * `electionTicker` 会在 Raft server 初始化时作为后台协程启动，并运行在整个 Raft server 生命周期内。
@@ -287,7 +287,7 @@ func (rf *Raft) HandleRequestVoteResponse(term int, response RequestVoteResponse
 
 **日志复制流程 - 函数调用图：**
 
-![日志复制流程 - 函数调用图](https://yulan-img-work.oss-cn-beijing.aliyuncs.com/img/202205131809031.png)
+![日志复制流程 - 函数调用图](https://yulan-img-work.oss-cn-beijing.aliyuncs.com/img/202205151047166.png)
 
 * `boardCastEntries`：心跳广播 & 追加日志。
   * Raft 心跳与追加日志共用该函数，当 append entries 为空时，表示心跳，非空时，表示追加日志。
@@ -507,7 +507,7 @@ func (rf *Raft) persist() {
 
 **日志压缩流程 - 函数调用图：**
 
-![日志压缩流程 - 函数调用图](https://yulan-img-work.oss-cn-beijing.aliyuncs.com/img/202205131810684.png)
+![日志压缩流程 - 函数调用图](https://yulan-img-work.oss-cn-beijing.aliyuncs.com/img/202205151048076.png)
 
 * `Snapshot`：用于应用层调用，创建一个快照。
   * 首先确保创建快照的 index 索引大于当前最新快照中的最后一个日志对应的索引，若否，则直接返回；
